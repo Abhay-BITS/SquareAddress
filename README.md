@@ -12,7 +12,6 @@ Offline, rule-based extraction into structured fields using [bharataddress](http
 - Tiered `building_name` extraction (project dictionary → OSM master → heuristics → area fallbacks)
 - `dotcom_matched` / `location_matched` Yes/No flags for exact dictionary hits
 - Pincode + state cross-check with reliability-weighted `confidence` score
-- Optional Groq LLM backfill for remaining empty `building_name` rows
 
 ## Setup
 
@@ -40,11 +39,6 @@ Point `INPUT_CSV` in `Address.py` at your file, then:
 ```bash
 python3 Address.py                        # full parse → output CSV + cross_check_report.txt
 python3 Address.py --project-retry-only   # dotcom fuzzy retry on unmatched rows only
-
-# Optional LLM backfill (requires GROQ_API_KEY)
-export GROQ_API_KEY="your-key"
-pip install groq
-python3 Address_llm_backfill.py --limit 20
 ```
 
 ## Output columns

@@ -12,8 +12,10 @@ cross_check_report.txt
 project_retry_report.txt
 *.log
 
-# LLM backfill artifacts
+# Local-only scripts and artifacts (not published)
+Address_llm_backfill.py
 COMBO_DEMOG_llm_*
+llm_backfill_run.log
 
 # Python
 __pycache__/

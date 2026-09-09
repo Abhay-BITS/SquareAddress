@@ -251,7 +251,6 @@ Sample run on a bureau dataset (~42,248 rows):
 
 - Tier-1 dictionary fills (~35% dotcom) are the most reliable building names.
 - ~9,000 rows remain empty — mostly pure street addresses with no project name in text.
-- Optional: `Address_llm_backfill.py` (Groq) for remaining empty `building_name` rows.
 
 ### Dipstick analysis (500 random rows)
 
@@ -314,7 +313,6 @@ Sample run on a bureau dataset (~42,248 rows):
 | File | Role |
 |------|------|
 | `Address.py` | Main pipeline |
-| `Address_llm_backfill.py` | Optional Groq backfill for empty `building_name` |
 | `cross_check_report.txt` | Per-run stats (generated locally) |
 | `requirements.txt` | Python dependencies |
 | `dotcom.project.csv` | Project dictionary (local, not in repo) |
