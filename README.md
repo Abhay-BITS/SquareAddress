@@ -1,6 +1,6 @@
-# BLR Bureau Address Parsing
+# SquareAddress
 
-Offline pipeline to parse messy credit-bureau addresses (Bangalore focus) into structured fields using [bharataddress](https://github.com/Neelagiri65/bharataddress), Square Yards project dictionary matching, and OSM location enrichment.
+BLR bureau address parsing pipeline — offline extraction of messy credit-bureau addresses (Bangalore focus) into structured fields using [bharataddress](https://github.com/Neelagiri65/bharataddress), Square Yards project dictionary matching, and OSM location enrichment.
 
 ## Features
 
