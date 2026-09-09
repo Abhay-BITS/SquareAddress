@@ -1,0 +1,36 @@
+# Secrets
+.env
+*.env
+.env.*
+
+# Bureau input / output dumps (keep locally, not in repo)
+*.csv
+!sample/*.csv
+
+# Reports and run logs
+cross_check_report.txt
+project_retry_report.txt
+*.log
+
+# LLM backfill artifacts
+COMBO_DEMOG_llm_*
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.egg-info/
+.venv/
+venv/
+
+# Vendored / cloned deps (install via pip — see README)
+_vendor/
+bharataddress/
+
+# OS / IDE
+.DS_Store
+.idea/
+.vscode/
+
+# Word export (source of truth is .md)
+ADDRESS_PARSING_DOCS.docx
