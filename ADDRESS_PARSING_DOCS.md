@@ -1,16 +1,12 @@
-# Bangalore Bureau Address Parsing
+# SquareAddress — Address Parsing Engine
 
-Pipeline for **Bangalore-only** rows from `COMBO_DEMOG.csv` (ZIP `560xxx` / `561xxx` / `562xxx`).
-
-| Item | Path |
-|------|------|
-| Input | `COMBO_DEMOG.csv` (~42,248 BLR rows; full India backup in `COMBO_DEMOG_all_cities.csv`) |
-| Output | `COMBO_DEMOG_parsed.csv` |
-| Script | `Address.py` |
-| Engine | [bharataddress](https://github.com/Neelagiri65/bharataddress) + Square Yards enrichment |
-| Dotcom dictionary | `dotcom.project.csv` |
-| OSM location dictionary | `../india_location_db/data/india_location_master.csv` |
-| Pincode localities | `Pincode To Locality  Mapping.csv` |
+| Item | Description |
+|------|-------------|
+| **Script** | `Address.py` |
+| **Engine** | [bharataddress](https://github.com/Neelagiri65/bharataddress) (offline, rule-based) |
+| **Optional dictionaries** | `dotcom.project.csv`, `india_location_master.csv`, `Pincode To Locality  Mapping.csv` |
+| **Example input** | Bureau CSV with `ADDRESS`, `State code`, `ZIP` (e.g. `COMBO_DEMOG.csv`) |
+| **Output** | Parsed CSV (e.g. `COMBO_DEMOG_parsed.csv`) + `cross_check_report.txt` |
 
 ---
 
@@ -24,10 +20,10 @@ Pipeline for **Bangalore-only** rows from `COMBO_DEMOG.csv` (ZIP `560xxx` / `561
 | `building_number` | Flat / house / plot number |
 | `building_name` | Project, society, layout, or named building |
 | `dotcom_matched` | **Yes** if `building_name` is an exact canonical name from `dotcom.project.csv`; else **No** |
-| `location_matched` | **Yes** if `building_name` is an exact canonical name from `india_location_master.csv` (Bangalore OSM); else **No** |
+| `location_matched` | **Yes** if `building_name` is an exact canonical name from `india_location_master.csv`; else **No** |
 | `landmark` | Text after NEAR / BEHIND / OPP |
-| `locality` | Sub-area name |
-| `city` | City (usually Bangalore) |
+| `locality` | Sub-area / neighbourhood name |
+| `city` | City |
 | `district` | District |
 | `confidence` | Reliability score (see §8) |
 
@@ -35,54 +31,56 @@ Pipeline for **Bangalore-only** rows from `COMBO_DEMOG.csv` (ZIP `560xxx` / `561
 
 ## 2. End-to-end flow
 
+Each address goes through **7 steps, in order**. Whatever comes out of step 7 is saved in the output file.
+
+**Step 1 — Clean up the raw text**  
+Fix common typos and spacing (e.g. broken city names), remove `S/O …` name lines, add the pincode if missing, and insert commas so the rest of the system can read the address more easily.
+
+**Step 2 — Basic automatic parsing**  
+A standard India address parser reads the cleaned text and pulls out basics like city, district, and pincode using postal rules.
+
+**Step 3 — Fill gaps with simple patterns**  
+If flat/house number or landmark is still missing, look for obvious patterns (e.g. `FLAT NO 106`, `NEAR …`).
+
+**Step 4 — Find the building/project name (tier 1)**  
+Match against the project list, then the OSM location master, then smart text rules. Take the best match found.
+
+**Step 5 — Find the locality**  
+Use the pincode locality map, a city gazetteer (pincode map + OSM localities), and fuzzy matching for slight misspellings.
+
+**Step 6 — Building name (tier 2, if still empty)**  
+Softer guesses from the address: layout names, society/colony names, or area-like words.
+
+**Step 7 — Quality tags and confidence score**  
+Set `dotcom_matched` / `location_matched` (Yes only on exact dictionary hits), then compute `confidence`.
+
 ```
-COMBO_DEMOG.csv row
-        │
-        ▼
-┌───────────────────────────┐
-│ 1. bureau_preprocess()    │  OCR fixes, S/O strip, pin append, comma insert
-└───────────────────────────┘
-        │
-        ▼
-┌───────────────────────────┐
-│ 2. bharataddress.parse()  │  Rule parser + India Post pincode lookup
-└───────────────────────────┘
-        │
-        ▼
-┌───────────────────────────┐
-│ 3. Regex backfill         │  building_number, landmark if still empty
-└───────────────────────────┘
-        │
-        ▼
-┌───────────────────────────┐
-│ 4. Building name (tier 1) │  Priority order below
-└───────────────────────────┘
-        │
-        ▼
-┌───────────────────────────┐
-│ 5. Locality enrichment    │  Pincode map → BLR gazetteer → fuzzy gazetteer
-└───────────────────────────┘
-        │
-        ▼
-┌───────────────────────────┐
-│ 6. Building name (tier 2) │  Area / layout / society fallbacks (if still empty)
-└───────────────────────────┘
-        │
-        ▼
-┌───────────────────────────┐
-│ 7. Match flags + score    │  dotcom_matched, location_matched, confidence
-└───────────────────────────┘
-        │
-        ▼
-COMBO_DEMOG_parsed.csv
+Input CSV row
+      │
+      ▼
+1. bureau_preprocess()
+      ▼
+2. bharataddress.parse()
+      ▼
+3. Regex backfill (building_number, landmark)
+      ▼
+4. Building name — tier 1
+      ▼
+5. Locality enrichment
+      ▼
+6. Building name — tier 2
+      ▼
+7. Match flags + confidence
+      ▼
+Output CSV
 ```
 
-Run:
+### Running the pipeline
+
+Change the input file path in `Address.py`, then:
 
 ```bash
-cd Address_Extraction
-python3 Address.py              # full BLR file
-python3 Address.py --filter-blr   # re-filter input from backup (once)
+python3 Address.py                        # full file
 python3 Address.py --project-retry-only   # dotcom fuzzy retry on unmatched rows
 ```
 
@@ -90,13 +88,22 @@ python3 Address.py --project-retry-only   # dotcom fuzzy retry on unmatched rows
 
 ## 3. Preprocessing (`bureau_preprocess`)
 
-Bureau strings are noisier than normal postal addresses. Before parsing we:
+Bureau strings are noisier than normal postal addresses. Before parsing:
 
-1. Apply **OCR spacing fixes** (`B ANGALORE` → `BANGALORE`, `R OAD` → `ROAD`, etc.)
-2. Insert digit/letter boundaries (`3RD` → `3 RD` for ordinals)
-3. Strip **S/O, C/O, W/O** parent-name prefixes
-4. Append ZIP if missing from text
-5. Insert commas between major segments
+**Fix broken spelling from OCR**  
+Patch common scan errors, e.g. `B ANGALORE` → `BANGALORE`, `R OAD` → `ROAD`.
+
+**Fix ordinal numbers**  
+Split ordinals safely (`3RD` → `3 RD`) so "3rd cross" parses correctly.
+
+**Remove parent or care-of lines**  
+Strip lines starting with `S/O`, `C/O`, or `W/O` (person names, not address parts).
+
+**Add pincode if missing from text**  
+Append the 6-digit ZIP from the CSV when absent from the address body.
+
+**Add commas between major parts**  
+Break run-on bureau text into segments (near landmarks, flat numbers, etc.).
 
 ---
 
@@ -104,41 +111,36 @@ Bureau strings are noisier than normal postal addresses. Before parsing we:
 
 ### Tier 1 (high trust)
 
-| Step | Source | Logic |
-|------|--------|-------|
-| A | **dotcom.project.csv** | Exact n-gram phrase match (city-scoped, then global) |
-| A2 | dotcom collapsed | Brand-filtered substring on space-removed text (OCR-glued names) |
-| A3 | dotcom fuzzy | Brand-filtered `rapidfuzz` token_set_ratio ≥ 0.88 |
-| B | **india_location_master.csv** | Exact phrase + collapsed substring + brand fuzzy (Bangalore, conf ≥ 0.5, apartment/building/complex types) |
-| C | Parser cleanup | Sanitize bharataddress `building_name` if it passes validation |
-| D | Compound suffix | Glued names: `JAYVILLA`, `KALPARUKSHA NEST` (before suffix-only regex) |
-| E | Suffix regex | Words before APARTMENT, TOWER, VILLA, NILAYA, HEIGHTS, … |
-| F | After-unit heuristic | Text after `FLAT NO 106`, `HNO 203`, etc. |
-| G | Multi-word layout | e.g. `MANJUSHREE NILAYA VSR LAYOUT` |
+| Step | Where it comes from | What we do |
+|------|---------------------|------------|
+| **A** | `dotcom.project.csv` | Exact project name in address. City-scoped first, then global. |
+| **B** | `india_location_master.csv` | Known apartments, towers, societies. Exact → collapsed → brand fuzzy. |
+| **C** | Basic parser output | Use parser `building_name` if it passes validation. |
+| **D** | Pattern in address text | Words before APARTMENT, TOWER, VILLA, NILAYA, HEIGHTS, etc. |
+| **E** | Pattern after flat/house number | Text after `FLAT NO 106`, `HNO 203`, etc. |
 
-### Tier 2 (area identity — fills gaps, lower semantic precision)
+### Tier 2 (area identity — lower precision)
 
 Only runs **after locality is known**, if `building_name` is still empty:
 
-| Step | Logic |
-|------|-------|
-| Landmark phrase | Building suffix inside NEAR/BEHIND chunk |
-| Single-word layout | `KAVERAPPA LAYOUT` (word ≥ 5 chars, not a blocked locality) |
-| Society/colony regex | `LIC MODEL HOUSING COLONY`, `CMR GARDEN` |
-| Parsed locality | Multi-word locality that appears verbatim in address |
-| Named area gazetteer | Longest 2+ word BLR locality phrase in address text |
-| Area token | Tokens ending PURAM / PURA / HALLI / LAYOUT / NAGAR / … |
-| Enclave/estate | `… ENCLAVE`, `… ESTATE`, `… TOWNSHIP` |
-| Before-floor | Name before `GROUND FLOOR` / `3RD FLOOR` (strict) |
+| Step | What we look for | Plain English |
+|------|------------------|---------------|
+| Landmark phrase | Text after NEAR or BEHIND | Use landmark chunk as stand-in name. |
+| Building suffix in landmark | Apartment/Tower/Villa inside NEAR/BEHIND chunk | Pull name before building-type word. |
+| Single-word layout | One word + LAYOUT (5+ chars, not blocked) | e.g. `KAVERAPPA LAYOUT`. |
+| Society/colony regex | Colony / housing society patterns | e.g. `LIC MODEL HOUSING COLONY`, `CMR GARDEN`. |
+| Parsed locality | Locality already found, verbatim in address | Reuse locality as building name. |
+| Named area gazetteer | Long 2+ word locality phrase in address | Longest known phrase match. |
+| Area token | Neighbourhood-style endings | Puram, Pura, Halli, Layout, Nagar, etc. |
+| Enclave/estate | Estate-style names | Enclave, Estate, Township. |
+| Before-floor | Text before floor mentions | Name before `GROUND FLOOR`, `3RD FLOOR` (strict). |
 
 ### Rejection filters (`_reject_building_name`)
 
-Applied on all cleaned names to avoid known bad extractions:
+Applied on all cleaned names:
 
-- Company suffixes: `PVT`, `LTD`, `LIMITED`, `GLOBALSOFT`, …
-- OCR fragments: `KA`, `IND`, `RE`, `RU`, `ORE`, split `BANGALORE` tokens
-- State abbreviations as words
-- Suffix-only: lone `VILLA`, `APARTMENT`, …
+- Company suffixes: PVT, LTD, LIMITED, GLOBALSOFT, etc.
+- Suffix-only: lone VILLA, APARTMENT, etc.
 - Numeric + suffix: `203 VILLA`
 - Short layout prefix: `BD LAYOUT`
 - All words ≤ 3 characters (`5 Ka Ind`)
@@ -147,44 +149,42 @@ Applied on all cleaned names to avoid known bad extractions:
 
 ## 5. dotcom dictionary (`dotcom.project.csv`)
 
-~211k project names from Square Yards dotcom.
+~211k project names (Square Yards dotcom). Indexed by city and brand (first word).
 
-**Load:** norm phrase → canonical `projectData.projectName`, indexed by city and first-word brand.
+**Match order:**
 
-**Exact match:** sliding n-grams (2–10 words) on OCR-fixed uppercase text against city bucket, then global bucket.
+1. **Exact** — scan 2–10 word chunks against city projects, then all projects.
+2. **Collapsed** — compact project names (10+ chars) inside compact address text; city first.
+3. **Fuzzy** — only when a brand in the address exists in the dictionary (15+ projects per brand). `rapidfuzz.token_set_ratio` ≥ 0.88 on 2–8 word windows. Empty-row backfill uses 0.90 with shared-word validation.
 
-**Collapsed match:** For each brand token in address, test compact project names (length ≥ 10) as substrings of compact address. City-scoped when possible.
-
-**Fuzzy match:** Only when brand token from address appears in dictionary (≥ 15 projects per brand). `rapidfuzz.token_set_ratio` ≥ 0.88 on 2–8 word windows. Main parse uses cutoff 0.88; empty-row backfill uses 0.90 with shared-word validation.
-
-**`dotcom_matched`:** `Yes` only when final `building_name` equals a canonical dotcom string exactly (not fuzzy-normalized).
+**`dotcom_matched = Yes`** only when `building_name` is the **exact** official dotcom name. Fuzzy/collapsed can still fill the name; they do not get the Yes flag.
 
 ---
 
 ## 6. Location dictionary (`india_location_master.csv`)
 
-Bangalore rows from OSM-derived master (~1,587 rows; ~600 building-type entities after filters).
+OSM-derived master, filtered by city and entity type in code.
 
-**Entity types used:** `apartment`, `residential_complex`, `building`, `commercial_complex`, `tower`, `mall`
-
-**Skipped:** roads, hospitals, temples, schools, offices, parks, …
-
+**Entity types used:** apartment, residential_complex, building, commercial_complex, tower, mall  
+**Skipped:** roads, hospitals, temples, schools, offices, parks, etc.  
 **Columns used:** `name`, `society_name`, `building_name` (confidence ≥ 0.5)
 
-**Match order:** exact n-gram → collapsed substring (compact ≥ 8) → brand-filtered fuzzy (same as dotcom)
+**Match order:** exact phrase → collapsed substring (compact ≥ 8 chars) → brand-filtered fuzzy (same idea as dotcom).
 
-**`location_matched`:** `Yes` only when final `building_name` equals a canonical OSM master name exactly.
+**`location_matched = Yes`** only when `building_name` exactly matches a canonical OSM master name.
 
 ---
 
 ## 7. Locality enrichment
 
+Four steps, stopping when something good is found:
+
 | Step | Source | Method |
 |------|--------|--------|
 | 1 | bharataddress + regex | Nagar / Colony / Layout patterns |
 | 2 | Pincode map CSV | Per-ZIP locality list; substring then fuzzy |
-| 3 | BLR gazetteer | All 560–562 pincodes from map + OSM localities; substring / collapsed / single fuzzy |
-| 4 | bharataddress localities.json | Fuzzy fallback per ZIP |
+| 3 | City gazetteer | Pincode map localities + OSM localities; substring / collapsed / fuzzy |
+| 4 | bharataddress `localities.json` | Fuzzy fallback per ZIP |
 
 Fuzzy locality uses `phonetic.best_match` or `rapidfuzz` with cutoff **0.82**.
 
@@ -192,61 +192,50 @@ Fuzzy locality uses `phonetic.best_match` or `rapidfuzz` with cutoff **0.82**.
 
 ## 8. Confidence score (reliability-weighted)
 
-Confidence is **not** just field count. It weights **pincode/state cross-check** and **dictionary-backed building names**.
+Confidence weights **pincode/state cross-check** and **dictionary-backed building names**, not just field count.
 
 | Signal | Points |
 |--------|--------|
 | Valid 6-digit ZIP | +0.18 |
 | ZIP found in India Post DB | +0.07 |
 | State code matches pincode lookup state | +0.15 |
-| State code **mismatch** vs pincode | **−0.12** |
+| State code mismatch vs pincode | −0.12 |
 | Parsed city matches pincode city | +0.10 |
 | City present, unverified | +0.04 |
 | `building_name` present | +0.22 |
-| `dotcom_matched = Yes` **or** `location_matched = Yes` | +0.18 |
-| `building_name` present but heuristic only | +0.06 |
-| `building_name` equals `locality` (duplicate) | +0.04 |
+| `dotcom_matched = Yes` or `location_matched = Yes` | +0.18 |
+| `building_name` heuristic only | +0.06 |
+| `building_name` equals `locality` | +0.04 |
 | Locality present | +0.08 |
 | Building number present | +0.04 |
 | Landmark present | +0.04 |
 
 **Range:** 0.0 – 1.0 (clamped)
 
-**Examples:**
+### Example benchmark (sample bureau run, ~42k rows)
 
-| Row profile | Approx. score |
-|-------------|---------------|
-| ZIP + state OK + dotcom building + locality | **0.90** |
-| ZIP + state OK + heuristic building + locality | **0.72** |
-| ZIP + state mismatch + locality only | **0.41** |
-| ZIP + no building, no locality | **0.25** |
+| Stat | Value |
+|------|------:|
+| Median | 0.900 |
+| Mean | 0.863 |
+| Min / Max | 0.22 / 1.00 |
+| P25 / P75 | 0.84 / 1.00 |
+| P10 / P90 | 0.62 / 1.00 |
 
-High confidence now implies a **verified geography cross-check** and preferably a **dictionary building name**, not merely many filled columns.
-
----
-
-## 9. Fuzzy matching summary
-
-| Use case | Library | Scorer | Cutoff |
-|----------|---------|--------|--------|
-| City / state alias | phonetic | normalise + fuzzy_ratio | 0.85 |
-| Locality vs gazetteer | phonetic / rapidfuzz | best_match / token_set_ratio | 0.82 |
-| Dotcom project (brand-filtered) | rapidfuzz | token_set_ratio | 0.88 |
-| Dotcom backfill (empty rows) | rapidfuzz | token_set_ratio | 0.90 + shared word |
-| Location master building | rapidfuzz | token_set_ratio | 0.88 |
-
-**Brand filtering:** Fuzzy runs only on candidate projects/buildings whose first word appears in the address. Prevents single-letter false positives (e.g. matching `M` as a project).
-
-**Not used for building fill:** semantic embedding search (wrong tool for OCR typos on proper nouns).
+| Band | Rows | Share |
+|------|-----:|------:|
+| ≥ 0.8 | 32,147 | 76.1% |
+| 0.6 – 0.8 | 7,800 | 18.5% |
+| < 0.6 | 2,301 | 5.4% |
 
 ---
 
-## 10. Latest BLR results
+## 9. Example evaluation results
 
-From `cross_check_report.txt` (42,248 rows):
+Sample run on a bureau dataset (~42,248 rows):
 
 | Field | Filled | Rate |
-|-------|--------|------|
+|-------|-------:|-----:|
 | building_name | ~32,729 | ~77.5% |
 | building_number | 33,055 | 78.2% |
 | locality | 40,767 | 96.5% |
@@ -255,18 +244,51 @@ From `cross_check_report.txt` (42,248 rows):
 | landmark | 7,553 | 17.9% |
 | dotcom_matched Yes | 14,749 | 34.9% |
 | location_matched Yes | 1,173 | 2.8% |
+| Heuristic / fallback fill | ~16,807 | ~40% |
 | confidence mean | 0.863 | 76% rows ≥ 0.8 |
 
-**Quality notes:**
+**Quality notes**
 
-- ~7% of rows have `building_name == locality` (tier-2 area fallback)
-- Tier-1 dictionary fills (~35% dotcom) are the most reliable building names
-- ~9,000 rows remain empty — mostly pure street addresses (`NO 120 3RD CROSS …`) with no project name in text
-- Optional: `Address_llm_backfill.py` (Groq) for remaining empty `building_name` rows
+- Tier-1 dictionary fills (~35% dotcom) are the most reliable building names.
+- ~9,000 rows remain empty — mostly pure street addresses with no project name in text.
+- Optional: `Address_llm_backfill.py` (Groq) for remaining empty `building_name` rows.
+
+### Dipstick analysis (500 random rows)
+
+| Field fill | Sample | Population |
+|------------|-------:|-----------:|
+| building_number | 78.0% | 78.2% |
+| building_name | 79.8% | 77.5% |
+| locality | 96.4% | 96.5% |
+| landmark | 19.2% | 17.9% |
+
+| Confidence | Sample | Population |
+|------------|-------:|-----------:|
+| Median | 0.900 | 0.900 |
+| Mean | 0.869 | 0.863 |
+| ≥ 0.8 | 78.0% | 76.1% |
+
+**Where `building_name` comes from (exclusive buckets)**
+
+| Source | Share |
+|--------|------:|
+| Dotcom verified | 33.6% |
+| Both dotcom + location | 1.8% |
+| Location verified only | 2.2% |
+| Heuristic / unverified | 42.2% |
+| Empty | 20.2% |
+
+**Quality signals (500-row sample)**
+
+| Issue | Sample |
+|-------|-------:|
+| Filled but no dictionary flag | 42.2% |
+| building_name = locality | 7.0% |
+| confidence < 0.6 | 5.6% |
 
 ---
 
-## 11. Example rows (from user review)
+## 10. Example rows (edge cases)
 
 | Address snippet | Issue | Fix applied |
 |-----------------|-------|-------------|
@@ -278,18 +300,27 @@ From `cross_check_report.txt` (42,248 rows):
 
 ---
 
+## 11. Limitations
+
+- `dotcom.project.csv` coverage is limited; many real societies are not listed.
+- ~20% empty `building_name`: garbled or street-only addresses, or name trapped in `locality`.
+- Low confidence (< 0.6): usually missing `building_name` and weak locality.
+- Heuristic tier-2 fills boost fill rate but are not dictionary-verified (`dotcom_matched` / `location_matched` stay No).
+
+---
+
 ## 12. File reference
 
 | File | Role |
 |------|------|
 | `Address.py` | Main pipeline |
-| `Address_llm_backfill.py` | Optional Groq backfill for empty building_name |
-| `cross_check_report.txt` | Per-run stats |
-| `COMBO_DEMOG_parsed.csv` | Output |
-| `dotcom.project.csv` | Square Yards project dictionary |
-| `india_location_db/data/india_location_master.csv` | Bangalore OSM location dictionary |
-| `Pincode To Locality  Mapping.csv` | Pincode → locality lists |
+| `Address_llm_backfill.py` | Optional Groq backfill for empty `building_name` |
+| `cross_check_report.txt` | Per-run stats (generated locally) |
+| `requirements.txt` | Python dependencies |
+| `dotcom.project.csv` | Project dictionary (local, not in repo) |
+| `india_location_master.csv` | OSM location dictionary (local, not in repo) |
+| `Pincode To Locality  Mapping.csv` | Pincode → locality lists (local, not in repo) |
 
 ---
 
-*Last updated: BLR pipeline, September 2026.*
+*SquareAddress — September 2026.*
